@@ -1,18 +1,22 @@
 using UnityEngine;
 using TMPro;
 using UnityEngine.UI;
-
+using System.Collections;
+using System.Collections.Generic;
 
 // Manages the main loop of the scene
 public class GestureDetectionManager : MonoBehaviour
 {
     // All the gestures are mapped to an int:
-    // right hand thumbs up = 0
-    //
-    //
-    //
-    //
-    // right hand thumbs down = 1
+    // Thumbs up = 0
+    // Thumbs down = 1
+    // Open palm up = 2
+    // Fist bump = 3
+    // Shaka = 4
+    // Point at this = 5
+    // Bunny = 6
+    // Okay sign = 7
+    // One finger up = 8
 
     // The audio played in the beginning of the scene
     [SerializeField] public AudioSource introAudio;
@@ -33,10 +37,35 @@ public class GestureDetectionManager : MonoBehaviour
     private bool _trialStarted = false;
     private bool _introInvoked = false;
     private bool _firstGestureGenerated = false;
-    private bool _gestureMatchingStarted = false;
-    private bool _buttonFunctionalityChanged = false;
+    private bool _gestureMatchingActive = false; 
+    private bool _buttonFunctionalityChanged = false; // flag as to wether the the button is for beginning the trial or passing
+    private bool _isColorChanging = false; // flag set to ignore gesure recognition when changing color (inidcate they got it wrong or right)
+    private bool _isGestureChanging = false; // flag set to ignore gesure recognition when changing image
 
-    private int currentGesture;
+    private float fadeDuration = 1f; // controls how long it takes for images to fade in or out
+
+    private int currentGesture;     // the current gesture index
+    private int completedGestures = 0;
+    private int numberOfMisses = 0; // to keep track of how many times they make an incorrect gesture
+
+    struct Gesture {
+        public int index;
+        public int count;
+        public int misses;
+
+        public Gesture(int num) {
+            index = num;
+            count = 2;
+            misses = 0;
+        }
+
+        public bool DecrementCount() {
+            count--;
+            Debug.Log("Count is now: " + count);
+            return count <= 0;
+        }
+    }
+    private List<Gesture> gestureList;
 
     private void Start()
     {
@@ -48,12 +77,23 @@ public class GestureDetectionManager : MonoBehaviour
         }
 
         Invoke("PlayIntroduction", 3f);
+        FillGestureList();
     }
 
     private void PlayIntroduction()
     {
         _introInvoked = true;
         introAudio.Play();
+    }
+
+    // Used to create a map for each gesture and a count (the amount of times the player needs to match)
+    private void FillGestureList()
+    {
+        gestureList = new List<Gesture>();
+        for (int i = 0; i < gestureImages.Length; i++)
+        {
+            gestureList.Add(new Gesture(2));
+        }
     }
 
     void Update()
@@ -66,7 +106,7 @@ public class GestureDetectionManager : MonoBehaviour
         if (_trialStarted && _introComplete && !trialAudio.isPlaying && trialAudio.time == 0.0f)
         {
             _trialComplete = true;
-            _gestureMatchingStarted = true;
+            _gestureMatchingActive = true;
             GenerateFirstGesture();
         }
     }
@@ -81,8 +121,20 @@ public class GestureDetectionManager : MonoBehaviour
 
     private void GenerateGesture()
     {
-        currentGesture = Random.Range(0, gestureImages.Length);
-        displayedGesture.texture = gestureImages[currentGesture];
+        if (completedGestures == gestureImages.Length) {
+            return;
+        }
+
+        currentGesture = Random.Range(0, gestureList.Count);
+        bool done = gestureList[currentGesture].DecrementCount();
+        if (done) {
+            Debug.Log("Detected a done gesture, going to remove it now...");
+            gestureList.RemoveAt(currentGesture);
+            completedGestures += 1;
+        }
+
+
+        StartCoroutine(FadeOutAndChangeGesture(currentGesture));
         gestureDescription.text = gestureImages[currentGesture].name;
     }
 
@@ -118,35 +170,78 @@ public class GestureDetectionManager : MonoBehaviour
 
     public void GestureMade(int gestureType)
     {
-        if (!_gestureMatchingStarted) return;
+        if (!_gestureMatchingActive || _isColorChanging || _isGestureChanging) return;
 
         Debug.Log("Gesture made called! Gesture type = " + gestureType + ", the gesture we need is: " + currentGesture);
 
-        int threshold = (currentGesture * 2) + 1;
-
-        Debug.Log("The gesture threshold is " + threshold);
-        if (gestureType == threshold || (gestureType + 1) == threshold)
+        if (gestureType == currentGesture)
         {
             indicator.color = Color.green;
-            GenerateGesture();
+            if (completedGestures == gestureImages.Length)
+            {
+                _gestureMatchingActive = false;
+                Debug.Log("All done with the gesture matching!");
+                return;
+            }
+            StartCoroutine(WaitAndGenerateGesture(0.5f));
         }
         else
         {
             indicator.color = Color.red;
+            numberOfMisses += 1;
+            StartCoroutine(WaitAndChangeColor(1.5f));
         }
     }
+
+    IEnumerator WaitAndGenerateGesture(float seconds)
+    {
+        _isColorChanging = true;
+        yield return new WaitForSeconds(seconds);
+        indicator.color = Color.white;
+        _isColorChanging = false;
+        GenerateGesture();
+    }
+
+    IEnumerator WaitAndChangeColor(float seconds)
+    {
+        _isColorChanging = true;
+        yield return new WaitForSeconds(seconds);
+        indicator.color = Color.white;
+        _isColorChanging = false;
+    }
+
 
     public void GestureEnded(int gestureType)
     {
     }
 
-    public void StartButtonPressed()
+    // Coroutine to fade out the current image, change to the new image, and fade it in
+    private IEnumerator FadeOutAndChangeGesture(int gestureIndex)
     {
-        Debug.Log("The button has been pressed!");
-    }
+        _isGestureChanging = true;
+        float timer = 0f;
+        Color startColor = displayedGesture.color;
+        Color endColor = new Color(startColor.r, startColor.g, startColor.b, 0f);
 
-    public void BunnyPerformed()
-    {
-        Debug.Log("Bunny performed!");
+        while (timer < fadeDuration)
+        {
+            timer += Time.deltaTime;
+            displayedGesture.color = Color.Lerp(startColor, endColor, timer / fadeDuration);
+            yield return null;
+        }
+
+        displayedGesture.texture = gestureImages[gestureIndex];
+
+        timer = 0f;
+        startColor = new Color(displayedGesture.color.r, displayedGesture.color.g, displayedGesture.color.b, 0f);
+        endColor = new Color(displayedGesture.color.r, displayedGesture.color.g, displayedGesture.color.b, 1f);
+
+        while (timer < fadeDuration)
+        {
+            timer += Time.deltaTime;
+            displayedGesture.color = Color.Lerp(startColor, endColor, timer / fadeDuration);
+            yield return null;
+        }
+        _isGestureChanging = false;
     }
 }
